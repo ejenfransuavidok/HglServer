@@ -1,0 +1,394 @@
+// Proto file issued and maintained by HGL Dynamics Ltd.
+//
+// Last updated 2nd November 2021.
+//
+// Changed data streaming response message and behaviour.
+// Also made a slight change to the AcqUnitSettings
+// message structure.
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.hgldynamics.acquisition.api";
+option java_outer_classname = "HglDynamicsAcquisitionApi";
+option objc_class_prefix = "HglDynamicsAcquisitionApi";
+
+package com.hgldynamics.acquisition;
+
+// A service definition for command and control.
+service ControlService {
+    // A request-reply call that responds with an acquisition
+    // unit's status information.
+    rpc GetStatus (Void) returns (AcqUnitStatus);
+
+    // A request-reply call that validates a configuration and
+    // returns a validation status message.
+    rpc ValidateConfig (ConfigurationFile) returns (ConfigAcknowledgement);
+
+    // A request-reply call that causes a unit to configure its
+    // hardware and start acquiring data into its internal circular channel buffers.
+    // This does not cause the data to be published via gRPC. A gRPC client must
+    // register interest in the data it wants for a given channel by a separate call.
+    rpc Configure (ConfigurationFile) returns (ConfigAcknowledgement);
+
+    // Request the current config XML file form an acquisition unit.
+    // Note that if there is no config currently saved  on the acquisition
+    // unit then the returned message will contain an empty buffer.
+    rpc GetConfig (Void) returns (ConfigurationFile);
+
+    // A request-reply call that causes a unit to reset, thus stopping acquisition
+    // and streaming. Depending on the value in the message the unit either tries
+    // to reconfigure with the last known config or it clears the last known config
+    // and enters a faulted state reporting no config found.
+    rpc Reset (ResetAcqUnit) returns (Void);
+
+    // A request-reply call that responds with an acquisition
+    // unit's current software settings
+    rpc GetSettings (Void) returns (AcqUnitSettings);
+
+    // A request-reply call that applies new settings on an acquisition
+    // unit. This will cause the acquisition unit to soft reset to
+    // apply the new settings.
+    //
+    // Incorrect settings could cause the device to function incorrectly.
+    //
+    // If the server encounters a detectable error then none of the
+    // provided settings are applied and the acquisition unit will
+    // continue to use its existing settings.
+    rpc SetSettings (AcqUnitSettings) returns (AcqUnitSettingsAck);
+
+    // A request-reply call that responds with an acquisition
+    // unit's log file.
+    rpc GetLogFile (LogFileRequest) returns (LogFile);
+}
+
+// A service definition for streaming data.
+service DataService {
+    // A streaming call that returns stream of retrieved data
+    //
+    // IMPORTANT: The channel tags specified in the LiveDataRequest
+    // must all have the same acquisition sample rate. If a request
+    // specifies a group of channel tags with mixed sample rates
+    // the request will be rejected.
+    rpc SubscribeToData (stream LiveDataRequest) returns (stream SamplesForTag);
+}
+
+// A void message that contains nothing; used as a placeholder
+// for API calls without arguments
+message Void {
+}
+
+// Status message for an acquisition unit a protobuf equivalent
+// of the POD message that the acquisition unit publishes by
+// multicast once per second.
+message AcqUnitStatus {
+    int32 applicationType = 1;
+    string hostName = 2;
+    string version = 3;
+    string tcpListenAddress = 4;
+    int32 tcpListenPort = 5;
+    string mcastListenAddress = 6;
+    int32 mcastListenPort = 7;
+    int32 grpcMetaDataServerPort = 8;
+    int32 grpcStreamingDataServerPort = 9;
+    string primaryAddress = 10;
+    string primaryNetmask = 11;
+    string secondaryAddress = 12;
+    string secondaryNetmask = 13;
+    string testCell = 14;
+    string uptime = 15;
+    string cpuLoadPercent = 16;
+    string tempDegC = 17;
+    enum Status {
+        FAULTED = 0;
+        IDLE = 1;
+        CONFIGURING = 2;
+        SCANNING = 3;
+        RESETTING = 4;
+    }
+    Status status = 18;
+    enum LastErrorReason {
+        NO_ERROR = 0;
+        GENERAL_ERROR = 1;
+        CONFIG_NOT_FOUND = 2;
+        CONFIG_FILE_ERROR = 3;
+        CONFIG_HARDWARE_ERROR = 4;
+        CONFIG_SOFTWARE_ERROR = 5;
+        CONFIG_INVALID_STATE_ERROR = 6;
+        SCANNING_START_HARDWARE_ERROR = 7;
+        SCANNING_HARDWARE_ERROR = 8;
+        SCANNING_SOFTWARE_ERROR = 9;
+        SCANNING_STOP_HARDWARE_ERROR = 10;
+        SCANNING_STOP_STREAMS_ERROR = 11;
+        SCANNING_STREAMS_ERROR = 12;
+        SCANNING_INVALID_STATE_ERROR = 13;
+        RESET_ERROR = 14;
+    }
+    LastErrorReason lastErrorReason = 19;
+    string lastErrorTime = 20;
+    int32 numEnabledChannels = 22;
+    int32 numAttachedDragonflies = 23;
+    // Nested message type describing a Dragonfly card.
+    message DragonflyInfo
+    {
+        string serialNumber = 1;
+        string version = 2;
+        string udpListenAddress = 3;
+        int32 udpListenPort = 4;
+        int32 numChannels = 5;
+        int32 startChannel = 6;
+        // This will contain up to 4 values one for each
+        // block of 8 channels.
+        repeated uint32 status = 7;
+        // This will contain up to 4 values one for each
+        // block of 8 channels.
+        repeated uint32 feature = 8;
+        // This will contain up to 4 values one for each
+        // block of 8 channels.
+        repeated string sigCondType = 9;
+    };
+    // This will contain up to 2 values one for each
+    // Dragonfly card.
+    repeated DragonflyInfo dragonflyCards = 24;
+}
+
+// Message to send across a byte buffer containing an XML
+// file read in from disk into the byte buffer.
+message ConfigurationFile {
+    bytes xmlBuffer = 1;
+}
+
+// Response message used to acknowledge validity of
+// a configuration file.
+message ConfigAcknowledgement {
+    enum ConfigError
+    {
+        NO_ERRORS = 0;
+        INCORRECT_STATE = 1;
+        FAILED_TO_CREATE_BACKUP = 2;
+        CONFIG_FILE_ERROR = 3;
+        GENERAL_SETTINGS_ERROR = 4;
+        INVALID_NUMBER_OF_MODULES = 5;
+        MODULE_AND_DEVICE_MISMATCH = 6;
+        INVALID_CHANNEL_CONFIGURATION = 7;
+    };
+    ConfigError configError = 1;
+}
+
+// Message used to reset a device.
+message ResetAcqUnit {
+    bool clearLastUsedConfig = 1;
+}
+
+// A message containing N tags that the client wants to retrieve the data for
+//
+// IMPORTANT: The channel tags specified in the LiveDataRequest must all
+// have the same acquisition sample rate.
+message LiveDataRequest {
+    repeated string tags = 1;
+}
+
+// A data package with streaming data for a particular
+// a channel tag.
+//
+// This new version does not use oneof and nested
+// message structures for performance reasons.
+//
+// Only one of calibratedSamples or rawAdcSamples
+// will contain sample values. Use the field isCalibrated
+// to know which to read sample values from.
+message SamplesForTag {
+    // A channel name.
+    string tag = 1;
+    // Hundred nanosecond intervals since 1970-01-01 00:00:00.
+    int64 utcTimestamp = 2;
+    // An array of float values representing the readings of a channel
+    // calibrated into a specified unit of measurement defined in the
+    // configuration file.
+    repeated float calibratedSamples = 3;
+    // An array of bytes representing the a channel's ADC sample values
+    // if the configuration specified 16bit samples then there are 2
+    // bytes per sample. If the configuration specified 24bit samples
+    // then there are 3 bytes per sample.
+    bytes rawAdcSamples = 4;
+    // Flag to denote which samples field is in use for this message
+    // instance.
+    bool isCalibrated = 5;
+}
+
+// A message to hold the acquisition unit's software settings
+// that control its behaviour.
+message AcqUnitSettings {
+    // Control verbosity of the acquisition unit's log files.
+    // The log file has a maximum size of 25MB. There are 2
+    // log files on disk. The current active log plus the previous
+    // 25MB log file.
+    enum AppDebugLevel {
+        // Only 'fatal' and 'error' level log messages.
+        ERRORS = 0;
+        // All the log levels from ERRORS with the addition
+        // of 'warning' level messages.
+        MINIMAL = 1;
+        // All the log levels from MINIMAL with the addition
+        // of 'info' level messages.
+        NORMAL = 2;
+        // All the log levels from NORMAL with the addition
+        // of 'debug' level messages.
+        FULL = 3;
+    }
+    AppDebugLevel debugLevel = 1;
+    // HGL devices can be "soft" grouped together in a collection
+    // of devices that are operating on the same test article
+    // we call this grouping a test cell. This field is not
+    // currently used for this application but is here for future
+    // use. By default it is set to the reserved keyword of "NONE".
+    // The test cell string should always be uppercase.
+    string testCell = 2;
+    // The primary network adapter is the public facing adapter on
+    // the acquisition unit's CPU that will be used to communicate to
+    // external systems via gRPC.
+    //
+    // If DHCP is to be used then set the value of primaryIpAddress
+    // to "dhcp" else set it to a valid static ipv4 address.
+    //
+    // Set the primary netmask to an empty string when using DHCP
+    // else set a valid ipv4 netmask.
+    string primaryIpAddress = 3;
+    string primaryNetmask = 4;
+    // Set the address and netmask of the secondary network adapter
+    // on the acquisition unit CPU. This must be a static ipv4 address.
+    // The secondary network adapter is used for the acquisition
+    // unit's embedded CPU module to communicate with the internal
+    // Dragonfly data acquisition cards, which are Ethernet based.
+    //
+    // It is unlikely you should need to change the secondary
+    // address or netmask and changing these settings should be
+    // done with care. Incorrect settings will stop the unit from
+    // functioning.
+    string secondaryIpAddress = 5;
+    string secondaryNetmask = 6;
+    // Multicast group address and port used internally by Dragonfly
+    // acquisition cards and the embedded CPU module to which the
+    // acquisition card publishes its status information. This happens
+    // on the internal secondary adapter and these multicasts are not
+    // publicly visible outside the device on the primary network.
+    //
+    // This should not be changed unless with good reason. Incorrect
+    // settings will stop the unit from functioning.
+    string dragonflyStatusMcastGroup = 7;
+    uint32 dragonflyStatusMcastPort = 8;
+    // Multicast group address and port used by the software on the
+    // acquisition unit's CPU to publish its status message. The
+    // contents of this status message is the same as the gRPC
+    // AcqUnitStatus message above.
+    //
+    // These values should not need to be changed. Incorrect settings
+    // will stop the unit from functioning.
+    string multicastStatusGroup = 9;
+    uint32 multicastStatusPort = 10;
+    // Boolean to control whether the acquisition unit's CPU software
+    // publishes its status message using multicast. If set to false
+    // the software uses broadcasts instead.
+    bool useMulticastStatus = 11;
+    // Port used to publish the status message when set to not use
+    // multicasts. By default the software uses multicasts.
+    uint32 broadcastStatusPort = 12;
+    // Port used by the acquisition unit CPU to receive unicast
+    // messages from the Dragonfly acquisition cards on the secondary
+    // network.
+    uint32 udpRcvPort = 13;
+    // Port used by the acquisition unit CPU to communicate with
+    // external systems on the primary network. Messages sent and received
+    // on this port use proprietary HGL Dynamics message formats.
+    // All the messages and commands available on this port mirror
+    // what is available using the gRPC calls in this proto file.
+    uint32 tcpListenPort = 14;
+    // Port used by acquisition CPU on which it receives streamed
+    // unicast data packets from the Dragonfly acquisition cards. This
+    // uses the internal secondary network.
+    uint32 streamingTargetPort = 15;
+    // Multicast group address and port on which the acquisition CPU
+    // software can receive HGL Dynamics proprietary  setup related
+    // messages.
+    //
+    // These values should not need to be changed. Incorrect settings
+    // will stop the unit from functioning.
+    string multicastRecvGroup = 16;
+    uint32 multicastRecvPort = 17;
+    // By default the acquisition unit's CPU software uses a pre-allocated
+    // pool of messages to store received streaming data messages from the
+    // Dragonfly acquisition cards.
+    //
+    // The default value should be sufficient and should not be changed
+    // unless necessary. You can disable the use of the message pool
+    // and fallback to ad-hoc dynamic allocations by setting this to 0.
+    uint32 msgPoolSize = 18;
+    // Set the port used by the acquisition unit CPU software to run
+    // the ControlService gRPC server.
+    uint32 grpcControlServerPort = 19;
+    // Set the port used by the acquisition unit CPU software to run
+    // the DataService gRPC server.
+    uint32 grpcDataServerPort = 20;
+    // Defines a per channel circular message buffer limit for outgoing
+    // gRPC streaming data amessages.
+    //
+    // A value > 0 implies we use a circular pool of streaming data
+    // mesages per channel and that these messages will be sent via
+    // a separate queue-based thread.
+    //
+    // A value of 0 implies no circular pool is used and streaming
+    // data messages are sent immediately without using a separate
+    // queued thread.
+    //
+    // This setting should not be changed unless absolutely necessary.
+    uint32 grpcPerChanMsgPoolSize = 21;
+}
+
+// Response to a SetSettings call.
+message AcqUnitSettingsAck {
+    enum SettingsError {
+        TEST_CELL = 0;
+        PRIMARY_IP = 1;
+        PRIMARY_NETMASK = 2;
+        SECONDARY_IP = 3;
+        SECONDARY_NETMASK = 4;
+        DRAGONFLY_STATUS_MCAST_GROUP = 5;
+        DRAGONFLY_STATUS_MCAST_PORT = 6;
+        STATUS_MCAST_GROUP = 7;
+        STATUS_MCAST_PORT = 8;
+        BROADCAST_STATUS_PORT = 9;
+        UDP_RCV_PORT = 10;
+        TCP_LISTEN_PORT = 11;
+        STREAMING_TARGET_PORT = 12;
+        MULTICAST_RECV_GROUP = 13;
+        MULTICAST_RECV_PORT = 14;
+        GRPC_CONTROL_SERVER_PORT = 15;
+        GRPC_DATA_SERVER_PORTS = 16;
+        DUPLICATE_PORT = 17;
+    }
+    // The errors field will be empty if no errors but
+    // will be non-empty if errors occurred. If acquisition
+    // unit settings fields caused errors there will be an
+    // entry for each field that caused an error.
+    repeated SettingsError errors = 1;
+}
+
+// Message to request a copy of an acquisition units log file.
+message LogFileRequest {
+    // An acquisition unit's CPU software maintains debug log files.
+    // These comprise a current log, up to 4MB size, and an old
+    // log from the last log rotation of 4MB size.
+    //
+    // Set this to false to get the current log. Set to true to
+    // get the old log.
+    bool oldLog = 1;
+}
+
+// Message to send across a byte buffer containing an XML
+// file read in from disk into the byte buffer.
+message LogFile {
+    // The contents of the log file is buffered into
+    // the bytes "array" and sent back. The buffer
+    // can be written to disk and treated as a plain
+    // ASCII text file.
+    bytes logBuffer = 1;
+}
